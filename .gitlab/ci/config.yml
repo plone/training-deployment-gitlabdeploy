@@ -29,8 +29,19 @@ config:
         echo "set REGISTRY_IMAGE_PREFIX (see devops/README-GITLAB.md)."
         exit 1
       fi
+      # Resolve variable references ourselves. A group-level value such as
+      # registry.example.org/$CI_PROJECT_PATH gives every project its own path,
+      # but GitLab can hand it to the job unexpanded. expandvars only
+      # substitutes environment values; it never runs anything.
+      PREFIX="$(python3 -c 'import os, sys; print(os.path.expandvars(sys.argv[1]))' "${PREFIX}")"
+      case "${PREFIX}" in
+        *'$'*) echo "Unresolved variable in the registry prefix -> ${PREFIX}"; exit 1 ;;
+      esac
+      # Published as IMAGE_PREFIX, not REGISTRY_IMAGE_PREFIX: a group or project
+      # CI/CD variable outranks a dotenv variable of the same name, so later
+      # jobs would get the unresolved value back.
+      echo "IMAGE_PREFIX=${PREFIX}" >> build.env
       # Everything before the first slash is the registry host, port included.
-      echo "REGISTRY_IMAGE_PREFIX=${PREFIX}" >> build.env
       echo "REGISTRY_HOST=${PREFIX%%/*}" >> build.env
     # An immutable tag for every build: the git tag on a tag pipeline,
     # sha-<short> otherwise. This is what makes a rollback possible.

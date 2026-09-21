@@ -160,7 +160,7 @@
   script:
     - |
       set -e
-      IMAGE="${REGISTRY_IMAGE_PREFIX}/${IMAGE_ROLE}"
+      IMAGE="${IMAGE_PREFIX}/${IMAGE_ROLE}"
       BUILD_ARG_VALUE="$(printenv "${BUILD_ARG_NAME}")"
       TAGS="--tag ${IMAGE}:${IMAGE_TAG}"
       if [ "${CI_COMMIT_BRANCH}" = "${CI_DEFAULT_BRANCH}" ]; then

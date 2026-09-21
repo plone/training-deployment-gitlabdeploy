@@ -31,8 +31,9 @@ variables:
   #                              and REGISTRY_PULL_USER / REGISTRY_PULL_PASSWORD
   #                              for the swarm to pull.
   #
-  # The `config` job resolves the two into REGISTRY_IMAGE_PREFIX and
-  # REGISTRY_HOST and publishes them to every later job. Keep the effective
+  # The `config` job resolves the two -- including any $VARIABLE references,
+  # such as $CI_PROJECT_PATH -- into IMAGE_PREFIX and REGISTRY_HOST and
+  # publishes them to every later job. Keep the effective
   # value in sync with `container_images_prefix` in repository.toml, which is
   # what `make build-image` uses when building locally.
 

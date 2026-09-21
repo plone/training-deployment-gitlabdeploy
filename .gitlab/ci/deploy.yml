@@ -47,12 +47,14 @@
     # from the `config` job's deploy.env, sourced in the script below.
     GIT_DEPTH: "1"
   script:
-    # REGISTRY_IMAGE_PREFIX, REGISTRY_HOST and IMAGE_TAG all come from the
-    # `config` job's dotenv report, so everything derived from them is
-    # exported here rather than set in `variables:`.
+    # IMAGE_PREFIX, REGISTRY_HOST and IMAGE_TAG all come from the `config`
+    # job's dotenv report, so everything derived from them is exported here
+    # rather than set in `variables:`.
     #
     # The stack file reads:
     #   image: ${REGISTRY_IMAGE_PREFIX}/backend:${STACK_PARAM:-latest}
+    # and gets the prefix `config` resolved, not the raw CI/CD variable.
+    - export REGISTRY_IMAGE_PREFIX="${IMAGE_PREFIX}"
     - export STACK_PARAM="${IMAGE_TAG}"
     - export REGISTRY="${REGISTRY_HOST}"
     # Everything the stack file interpolates — hostname, stack name, data path,
