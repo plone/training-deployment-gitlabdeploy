@@ -4,7 +4,7 @@
 "build:backend":
   extends:
     - .build-image
-    - .rules-release
+    - .rules-build
   variables:
     IMAGE_ROLE: backend
     BUILD_ARG_NAME: PYTHON_VERSION
@@ -12,7 +12,7 @@
 "build:frontend":
   extends:
     - .build-image
-    - .rules-release
+    - .rules-build
   variables:
     IMAGE_ROLE: frontend
     BUILD_ARG_NAME: VOLTO_VERSION

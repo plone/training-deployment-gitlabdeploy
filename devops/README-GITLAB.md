@@ -113,7 +113,7 @@ names are too short to mask. The cluster documentation, chapter 6, has the full 
 
 | Variable | Example / purpose |
 | --- | --- |
-| `REGISTRY_IMAGE_PREFIX` | `registry.playcluster.plone.org/$CI_PROJECT_PATH` |
+| `REGISTRY_IMAGE_PREFIX` | `registry.playcluster.plone.org/$CI_PROJECT_PATH` — the `config` job expands the reference |
 | `REGISTRY_USER` / `REGISTRY_PASSWORD` | Push account, used by the build jobs |
 | `REGISTRY_PULL_USER` / `REGISTRY_PULL_PASSWORD` | **Read-only** account, handed to the swarm |
 
@@ -335,7 +335,9 @@ redeploy of an older tag. Two ways:
   | `IMAGE_TAG` | `sha-abc1234` — the tag you want to go back to |
 
   Manual pipeline variables take precedence over the ones `config` computes, so the deploy uses the
-  tag you gave it.
+  tag you gave it. The build jobs are skipped in such a pipeline (`.rules-build`): building would
+  push today's code under the old tag. On GitLab.com, pipeline variables must first be allowed under
+  Settings → CI/CD → Variables → *Minimum role to use pipeline variables*.
 
 ### Manual deploys
 

@@ -23,6 +23,10 @@ documentation, chapter 6, explains each in full; in short:
 | `DEPLOY_USER` | `plone`, the deployment user on the cluster | Yes | No |
 | `DEPLOY_SSH_PRIVATE_KEY` | its private key, as type *Variable* | Yes | Not possible, multi-line |
 
+`$CI_PROJECT_PATH` in `REGISTRY_IMAGE_PREFIX` is expanded by the `config` job,
+not by GitLab, which passes a group variable's reference to a predefined variable
+through literally. That is what lets one group variable serve every project.
+
 ```{important}
 **Protected** variables are only exposed on protected refs. Since deploys only
 run from `main` and from tags, that is what you want — but `main` must be a
@@ -159,8 +163,19 @@ on `main`, with a variable:
 | --- | --- |
 | `IMAGE_TAG` | `sha-abc1234` |
 
-Manually-set pipeline variables take precedence over what `config` computes, so
-the deploy uses the tag you gave it.
+A variable set by hand outranks the one `config` computes, so the deploy uses
+the tag you gave it. The build jobs do not run in such a pipeline: their rules
+skip them when `IMAGE_TAG` is set by hand. Otherwise they would build today's
+code and push it under the old tag, the "rollback" would deploy today's code,
+and the old image would lose its tag.
+
+```{note}
+On GitLab.com, new projects do not allow pipeline variables: the form under
+{menuselection}`Run pipeline` then shows no variables section at all. To allow
+them, set {menuselection}`Settings --> CI/CD --> Variables --> Minimum role to use pipeline variables`
+to *Maintainer*. The first way, **Re-deploy** from the environment, works
+either way.
+```
 
 ## Reading a failure
 
@@ -233,6 +248,16 @@ accepting connections. Swarm restarts them and it settles. Noisy, harmless.
 **`cache: not found` in a build log.** Expected on the first build of an image,
 or after the cache is garbage-collected. It should disappear on the next run —
 if it never does, the cache export is not working.
+
+**Errors in the `create-site` output.** Creating the site logs a page of
+`WARNING:GenericSetup…` and `Redefining mime type` lines, and two errors:
+
+    ERROR:plone.dexterity.schema:Error resolving behavior plone.allowdiscussion for factory Document
+    ERROR:plone.dexterity.schema:Error resolving behavior plone.translatable for factory Document
+
+The default Document type mentions behaviors from discussion and multilingual
+support, which are separate add-ons that this project does not install. The site
+is created correctly regardless.
 
 ## Where to go next
 

@@ -62,8 +62,13 @@ variable:
 | unset | GitLab's registry via `$CI_REGISTRY_IMAGE`, built-in credentials |
 | set | that prefix, with `REGISTRY_USER` / `REGISTRY_PASSWORD` |
 
-The `config` job resolves it, and derives the host by taking everything before
-the first slash — which keeps any `:port`:
+The `config` job resolves it. It first expands any variable references in the
+value itself — a group-level `registry.example.org/$CI_PROJECT_PATH` reaches
+the job unexpanded — and stops if anything is left unresolved. It publishes the
+result as `IMAGE_PREFIX`, not under the original name: a CI/CD variable outranks
+a dotenv variable of the same name, so later jobs would get the raw value back.
+It derives the host by taking everything before the first slash — which keeps
+any `:port`:
 
 ```sh
 echo "REGISTRY_HOST=${PREFIX%%/*}" >> build.env

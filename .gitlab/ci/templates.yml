@@ -29,6 +29,18 @@
     - if: $CI_COMMIT_TAG =~ /^v?\d+\.\d+/
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
+# Building images: as .rules-release, except when IMAGE_TAG is given by hand.
+# A pipeline run with IMAGE_TAG=sha-abc1234 is a redeploy of an image that
+# already exists -- a rollback. Building in that pipeline would push today's
+# code under the old tag, so the rollback would deploy today's code and the old
+# image would lose its tag. Only a hand-set IMAGE_TAG can match here: rules are
+# evaluated when the pipeline is created, before `config` computes its own.
+.rules-build:
+  rules:
+    - if: $IMAGE_TAG
+      when: never
+    - !reference [.rules-release, rules]
+
 ############################################
 # Environments
 ############################################
@@ -135,10 +147,8 @@
   before_script:
     # Push credentials: the self-hosted pair when REGISTRY_USER is set,
     # otherwise GitLab's built-in per-job credentials.
-    - docker login
-      -u "${REGISTRY_USER:-$CI_REGISTRY_USER}"
-      -p "${REGISTRY_PASSWORD:-$CI_REGISTRY_PASSWORD}"
-      "${REGISTRY_HOST}"
+    - printf '%s' "${REGISTRY_PASSWORD:-$CI_REGISTRY_PASSWORD}"
+      | docker login -u "${REGISTRY_USER:-$CI_REGISTRY_USER}" --password-stdin "${REGISTRY_HOST}"
     # One persistent buildkit shared by every build job, deliberately never
     # torn down.
     #
