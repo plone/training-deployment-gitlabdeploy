@@ -1,0 +1,9 @@
+# Python related
+*.egg-info
+.venv
+
+# Documentation builds. Only the Markdown sources are committed; the HTML and
+# the PDF are generated from them (`make html`, `make pdf`) and never edited.
+_build
+*.pdf
+styles/Microsoft

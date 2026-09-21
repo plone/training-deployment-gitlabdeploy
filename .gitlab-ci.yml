@@ -1,0 +1,72 @@
+---
+# GitLab CI/CD pipeline for playcluster-demo 🚀
+#
+# check -> test -> build -> deploy
+#
+# See devops/README-GITLAB.md for the CI/CD variables and the runner setup
+# this pipeline expects.
+
+stages:
+  - check
+  - test
+  - build
+  - deploy
+
+variables:
+  # Runner selection. Override in Settings -> CI/CD -> Variables to match the
+  # tags of your own runners.
+  # RUNNER_TAG_BUILD needs a privileged docker executor (docker-in-docker).
+  # RUNNER_TAG_DEPLOY only needs network access to DEPLOY_HOST over SSH.
+  RUNNER_TAG_BUILD: docker
+  RUNNER_TAG_DEPLOY: deploy
+
+  # Container registry — two supported modes, see devops/README-GITLAB.md:
+  #
+  #   GitLab registry (default)  leave REGISTRY_IMAGE_PREFIX unset. The
+  #                              pipeline uses $CI_REGISTRY_IMAGE and GitLab's
+  #                              built-in credentials.
+  #   Self-hosted registry       set REGISTRY_IMAGE_PREFIX as a CI/CD variable
+  #                              (e.g. registry.example.com/playcluster-demo),
+  #                              plus REGISTRY_USER / REGISTRY_PASSWORD to push
+  #                              and REGISTRY_PULL_USER / REGISTRY_PULL_PASSWORD
+  #                              for the swarm to pull.
+  #
+  # The `config` job resolves the two into REGISTRY_IMAGE_PREFIX and
+  # REGISTRY_HOST and publishes them to every later job. Keep the effective
+  # value in sync with `container_images_prefix` in repository.toml, which is
+  # what `make build-image` uses when building locally.
+
+  # Docker Swarm stack. Everything host-specific comes from the [deployment]
+  # section of repository.toml, resolved by the `config` job: DEPLOY_URL via
+  # the dotenv report, and the rest via the deploy.env artifact the deploy job
+  # sources. Nothing is hardcoded here.
+  DEPLOY_TIMEOUT: "360"
+
+  # Base images
+  UV_IMAGE: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+  NODE_IMAGE: node:24-bookworm
+  DOCKER_IMAGE: docker:29.7.2-cli
+  DEPLOY_IMAGE: ghcr.io/kitconcept/docker-stack-deploy:1.4.0
+
+  # Caches must live inside the build directory for GitLab to archive them.
+  UV_CACHE_DIR: ${CI_PROJECT_DIR}/.uv-cache
+  PNPM_STORE_DIR: ${CI_PROJECT_DIR}/.pnpm-store
+
+# Run merge request pipelines, and branch pipelines only when there is no open
+# merge request for that branch, so a branch never builds twice.
+# https://docs.gitlab.com/ci/jobs/job_rules/#avoid-duplicate-pipelines
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+
+include:
+  - local: .gitlab/ci/templates.yml
+  - local: .gitlab/ci/config.yml
+  - local: .gitlab/ci/backend.yml
+  - local: .gitlab/ci/frontend.yml
+  - local: .gitlab/ci/changelog.yml
+  - local: .gitlab/ci/deploy.yml

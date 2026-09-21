@@ -1,0 +1,105 @@
+---
+# The `config` job: single source of truth for versions, image tags and
+# deployment settings, mirroring what .github/workflows/config.yml used to
+# compute.
+#
+# It runs in stage `.pre` and publishes two things the rest of the pipeline
+# consumes:
+#   - build.env  — a dotenv report, so build jobs (a plain docker image with
+#                  neither uv nor jq) get the values as CI/CD variables.
+#   - deploy.env — an ordinary artifact the deploy job sources, for everything
+#                  the swarm stack file interpolates. GitLab caps a dotenv
+#                  report at 20 variables; this file has no such limit.
+config:
+  extends: .uv-job
+  stage: .pre
+  script:
+    - uvx repoplone settings dump > settings.json
+    - echo "PYTHON_VERSION=$(jq -r '.backend.python_version' settings.json)" >> build.env
+    - echo "VOLTO_VERSION=$(jq -r '.frontend.volto_version' settings.json)" >> build.env
+    # Registry selection. Setting the REGISTRY_IMAGE_PREFIX CI/CD variable
+    # switches the whole pipeline to a self-hosted registry; leaving it unset
+    # uses the GitLab registry of whichever instance runs this pipeline.
+    # See devops/README-GITLAB.md.
+    - |
+      PREFIX="${REGISTRY_IMAGE_PREFIX:-${CI_REGISTRY_IMAGE:-}}"
+      if [ -z "${PREFIX}" ]; then
+        echo "Neither REGISTRY_IMAGE_PREFIX nor CI_REGISTRY_IMAGE is set."
+        echo "Either enable the GitLab container registry for this project, or"
+        echo "set REGISTRY_IMAGE_PREFIX (see devops/README-GITLAB.md)."
+        exit 1
+      fi
+      # Everything before the first slash is the registry host, port included.
+      echo "REGISTRY_IMAGE_PREFIX=${PREFIX}" >> build.env
+      echo "REGISTRY_HOST=${PREFIX%%/*}" >> build.env
+    # An immutable tag for every build: the git tag on a tag pipeline,
+    # sha-<short> otherwise. This is what makes a rollback possible.
+    - echo "IMAGE_TAG=${CI_COMMIT_TAG:-sha-${CI_COMMIT_SHORT_SHA}}" >> build.env
+    # Deployment settings. repoplone parses repository.toml but does not
+    # expose unknown sections, so read [deployment] directly.
+    #
+    # GitLab caps a dotenv report at 20 variables, so only values that must be
+    # real CI/CD variables go there: build args, and DEPLOY_URL because
+    # `environment:url` is resolved by GitLab rather than by the shell.
+    # Everything the stack file needs goes into deploy.env, an ordinary
+    # artifact the deploy job sources — no limit, and room to grow.
+    - |
+      python3 - <<'PY'
+      import shlex, tomllib
+      dep = tomllib.load(open("repository.toml", "rb")).get("deployment", {})
+      # A copy of this repository must describe its own deployment before it
+      # builds or deploys anything, or it overwrites the original's stack and
+      # database. Only release pipelines are stopped: lint and test still run
+      # on branches and merge requests of a fresh copy.
+      import os
+      owner, here = dep.get("gitlab_project"), os.environ.get("CI_PROJECT_PATH")
+      releasing = bool(os.environ.get("CI_COMMIT_TAG")) or (
+          os.environ.get("CI_COMMIT_BRANCH") == os.environ.get("CI_DEFAULT_BRANCH"))
+      if owner and here and owner != here and releasing:
+          raise SystemExit(
+              f"repository.toml [deployment] still describes {owner}, but this "
+              f"pipeline runs in {here}.\n"
+              "Set your own hostname, stack_name, stack_prefix and data_path in "
+              f"[deployment], then set gitlab_project = \"{here}\".")
+      # The maintainer is not duplicated into repository.toml: backend's
+      # pyproject.toml already declares it, so that stays the single source.
+      authors = tomllib.load(open("backend/pyproject.toml", "rb"))["project"].get("authors") or [{}]
+      proj = authors[0]
+      missing = [k for k in ("hostname", "stack_name", "stack_prefix", "stack_file") if not dep.get(k)]
+      if missing:
+          raise SystemExit(f"repository.toml [deployment] is missing: {', '.join(missing)}")
+      tr = dep.get("traefik", {})
+
+      with open("build.env", "a") as f:
+          f.write(f"DEPLOY_URL=https://{dep['hostname']}\n")
+          f.write(f"MAINTAINER={proj.get('name', '')} <{proj.get('email', '')}>\n")
+
+      # Values may contain spaces ("node.labels.storage == persistent"), so
+      # quote them for `.` to source safely.
+      with open("deploy.env", "w") as f:
+          for k, v in [
+              ("PUBLIC_HOSTNAME", dep["hostname"]),
+              ("STACK_NAME", dep["stack_name"]),
+              ("STACK_PREFIX", dep["stack_prefix"]),
+              ("STACK_FILE", dep["stack_file"]),
+              ("DATA_PATH", dep.get("data_path", "")),
+              ("DB_PLACEMENT", dep.get("db_placement", "")),
+              ("APP_PLACEMENT", dep.get("app_placement", "")),
+              ("TRAEFIK_NETWORK", tr.get("network", "nw-public")),
+              ("TRAEFIK_CONSTRAINT_LABEL", tr.get("constraint_label", "public")),
+              ("TRAEFIK_ENTRYPOINT", tr.get("entrypoint", "https")),
+              ("TRAEFIK_CERTRESOLVER", tr.get("certresolver", "le")),
+          ]:
+              f.write(f"{k}={shlex.quote(v)}\n")
+      PY
+    # Fail here rather than at upload time with GitLab's opaque 400.
+    - |
+      n=$(wc -l < build.env)
+      echo "dotenv variables: ${n}/20"
+      [ "${n}" -le 20 ] || { echo "dotenv report would be rejected by GitLab"; exit 1; }
+    - cat build.env deploy.env
+  artifacts:
+    paths:
+      - deploy.env
+    reports:
+      dotenv: build.env

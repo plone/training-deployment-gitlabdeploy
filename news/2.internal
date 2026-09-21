@@ -1,0 +1,1 @@
+Move deployment settings into a `[deployment]` section of `repository.toml` instead of hardcoding the hostname, stack name, data path and Traefik details across the pipeline, the Makefile and the stack files. The swarm stack no longer ships its own Traefik, so it can be deployed to a cluster that already has one. @fredvd

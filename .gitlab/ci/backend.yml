@@ -1,0 +1,33 @@
+---
+# Backend jobs.
+
+"backend:lint":
+  extends:
+    - .uv-job
+    - .rules-code
+  stage: check
+  # Start as soon as config is done rather than waiting for a whole stage, so
+  # check and test run as one wide batch instead of two narrow ones.
+  needs: ["config"]
+  script:
+    - cd backend
+    # `make lint` and `make check` are not usable here: backend/Makefile runs
+    # `ruff check --fix` and `zpretty -i src`, which rewrite the working tree
+    # and always exit 0. These are the read-only equivalents, matching
+    # plone/meta's backend-lint.yml.
+    - uvx ruff@latest format --diff --config "${CI_PROJECT_DIR}/backend/pyproject.toml"
+    - uvx ruff@latest check --diff --config "${CI_PROJECT_DIR}/backend/pyproject.toml"
+    - uvx zpretty@latest --check src
+    - uvx pyroma@latest -d .
+    - uvx check-python-versions@latest .
+
+"backend:test":
+  extends:
+    - .uv-job
+    - .rules-code
+  stage: test
+  needs: ["config"]
+  script:
+    - cd backend
+    - make install
+    - make test

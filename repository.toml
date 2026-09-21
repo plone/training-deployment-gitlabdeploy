@@ -1,0 +1,106 @@
+[repository]
+name = "playcluster-demo"
+changelog = "CHANGELOG.md"
+version = "version.txt"
+version_format = "calver"
+# Used by `make build-image` locally. CI resolves its own prefix — see the
+# registry section of devops/README-GITLAB.md — so keep this in sync with
+# whichever registry the pipeline is pointed at.
+container_images_prefix = "registry.playcluster.plone.org/plone-training1/training-deployment-gitlabdeploy"
+compose = ["docker-compose.yml"]
+
+[repository.towncrier]
+section = "Project"
+settings = "towncrier.toml"
+
+[deployment]
+# Deployment settings.
+#
+# `repoplone` ignores this section — it parses the file happily but does not
+# expose unknown keys — so the CI `config` job and the Makefile read it
+# directly with tomllib. Change a value here and it propagates to the swarm
+# stack file, the GitLab pipeline and the local Docker stack.
+
+# The GitLab project this [deployment] section belongs to, as in
+# $CI_PROJECT_PATH. A copy of this repository -- a fork, or a clone pushed to a
+# new project -- must not deploy with these settings: it would replace this
+# project's stack and write into its database directory. The `config` job
+# therefore refuses to build or deploy while this does not match the project
+# the pipeline runs in. Set your own hostname, stack_name, stack_prefix and
+# data_path below first, then change this line.
+gitlab_project = "plone-training1/training-deployment-gitlabdeploy"
+# Public hostname the deployed site is served on.
+hostname = "playcluster.plone.org"
+# Docker Swarm stack name. Referenced by the traefik network name inside the
+# stack file, so the two must stay in step.
+stack_name = "playcluster-plone-org"
+# Prefix for Traefik router, service and middleware names. Those names are
+# global to the Traefik instance, so without a prefix a second project on the
+# same cluster would silently collide with this one. The stack name would work
+# but is long and unpleasant to read in the dashboard, so keep this short.
+stack_prefix = "reference"
+# Swarm stack file, relative to the repository root.
+stack_file = "devops/stacks/stack.yml"
+# Host path bind-mounted as the database volume on the swarm node.
+data_path = "/srv/playcluster-demo/data"
+# Swarm placement constraint pinning the database to the one node that holds
+# data_path. Without this the task can be rescheduled onto another node, where
+# the bind mount resolves to a different — empty — directory.
+#
+# Currently satisfied by play3, labelled with:
+#   docker node update --label-add storage=persistent play3
+#
+# A fixed node also works: "node.hostname == play3".
+db_placement = "node.labels.storage == persistent"
+# Swarm placement constraint for the stateless frontend and backend services.
+# Unlike db_placement this is optional — leave it out and the services are
+# free to run anywhere, which is merely suboptimal rather than harmful.
+#
+# Currently satisfied by play2 and play3, labelled with:
+#   docker node update --label-add type=worker <node>
+app_placement = "node.labels.type == worker"
+# Contact address for Let's Encrypt. Only used when this stack runs its own
+# Traefik rather than relying on one already present on the cluster.
+acme_email = "fred@plone.org"
+
+[deployment.local]
+# Hostname used by the local Docker stack (`make stack-start`).
+hostname = "playcluster-demo.localhost"
+
+[deployment.traefik]
+# The Traefik already running on the target cluster. This stack does not ship
+# its own — the cluster's instance publishes 80/443 and only one service can
+# hold those ingress ports. These four values must match that instance, and
+# are what the router labels in the stack file are built from.
+
+# External overlay network Traefik reaches services on.
+network = "nw-public"
+# Value Traefik's provider constraint filters on.
+constraint_label = "public"
+# Entrypoint name for TLS traffic.
+entrypoint = "https"
+# ACME certificate resolver name.
+certresolver = "le"
+
+[backend.package]
+name = "playclusterdemo"
+path = "backend"
+code_path = "src/playclusterdemo"
+changelog = "backend/CHANGELOG.md"
+towncrier_settings = "backend/pyproject.toml"
+base_package = "Products.CMFPlone"
+publish = false
+
+[frontend.package]
+name = "volto-playclusterdemo"
+path = "frontend/packages/volto-playclusterdemo"
+code_path = "src"
+changelog = "frontend/packages/volto-playclusterdemo/CHANGELOG.md"
+towncrier_settings = "frontend/packages/volto-playclusterdemo/towncrier.toml"
+base_package = "@plone/volto"
+publish = false
+
+[cookieplone]
+template = "project"
+template_version = "7fe2f1ac3a094f51fd63b6d50bc168771ceb7abe"
+generated_date = "2026-08-08 19:37:28"

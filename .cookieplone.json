@@ -1,0 +1,22 @@
+{
+    "title": "playcluster-demo",
+    "description": "A new project using Plone 6.",
+    "project_slug": "playcluster-demo",
+    "hostname": "playcluster.plone.org",
+    "author": "Fred van Dijk",
+    "email": "fred@plone.org",
+    "use_prerelease_versions": false,
+    "plone_version": "6.2.1",
+    "volto_version": "19.3.0",
+    "python_package_name": "playclusterdemo",
+    "frontend_addon_name": "volto-playclusterdemo",
+    "language_code": "en",
+    "github_organization": "plone",
+    "container_registry": "gitlab",
+    "devops_storage": "relstorage",
+    "devops_cache": false,
+    "devops_ansible": false,
+    "devops_gha_deploy": false,
+    "initialize_documentation": false,
+    "__template__": "project"
+}

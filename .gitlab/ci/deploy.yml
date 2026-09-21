@@ -1,0 +1,84 @@
+---
+# Build the container images and deploy the Docker Swarm stack.
+
+"build:backend":
+  extends:
+    - .build-image
+    - .rules-release
+  variables:
+    IMAGE_ROLE: backend
+    BUILD_ARG_NAME: PYTHON_VERSION
+
+"build:frontend":
+  extends:
+    - .build-image
+    - .rules-release
+  variables:
+    IMAGE_ROLE: frontend
+    BUILD_ARG_NAME: VOLTO_VERSION
+
+"deploy:production":
+  extends: .rules-release
+  stage: deploy
+  # ghcr.io/kitconcept/docker-stack-deploy is FROM docker:*-cli-alpine and sets
+  # ENTRYPOINT ["/docker-entrypoint.sh"]. Clearing the entrypoint lets GitLab
+  # run its shell, and the script then calls the entrypoint itself.
+  #
+  # It talks to the swarm over SSH (DOCKER_HOST=ssh://...), so this job needs
+  # neither docker-in-docker nor a mounted docker socket.
+  image:
+    name: ${DEPLOY_IMAGE}
+    entrypoint: [""]
+  tags:
+    - ${RUNNER_TAG_DEPLOY}
+  # Never let two deploys of the same stack overlap.
+  resource_group: production
+  interruptible: false
+  environment:
+    name: production
+    # DEPLOY_URL is published by the `config` job from repository.toml.
+    url: ${DEPLOY_URL}
+  variables:
+    REMOTE_HOST: ${DEPLOY_HOST}
+    REMOTE_PORT: "22"
+    REMOTE_USER: ${DEPLOY_USER}
+    REMOTE_PRIVATE_KEY: ${DEPLOY_SSH_PRIVATE_KEY}
+    # DEPLOY_TIMEOUT comes from .gitlab-ci.yml. STACK_FILE and STACK_NAME come
+    # from the `config` job's deploy.env, sourced in the script below.
+    GIT_DEPTH: "1"
+  script:
+    # REGISTRY_IMAGE_PREFIX, REGISTRY_HOST and IMAGE_TAG all come from the
+    # `config` job's dotenv report, so everything derived from them is
+    # exported here rather than set in `variables:`.
+    #
+    # The stack file reads:
+    #   image: ${REGISTRY_IMAGE_PREFIX}/backend:${STACK_PARAM:-latest}
+    - export STACK_PARAM="${IMAGE_TAG}"
+    - export REGISTRY="${REGISTRY_HOST}"
+    # Everything the stack file interpolates — hostname, stack name, data path,
+    # placement constraints, traefik settings — comes from deploy.env, written
+    # by the `config` job from repository.toml and picked up here as an
+    # ordinary artifact. It is a file rather than dotenv because GitLab caps a
+    # dotenv report at 20 variables.
+    - set -a && . ./deploy.env && set +a
+    # Pull credentials. docker-stack-deploy deploys with
+    # `--with-registry-auth`, which copies whatever we log in with onto every
+    # swarm node, where it persists so nodes can re-pull later. So this must
+    # be a read-only identity, and one that does not expire:
+    #   - self-hosted registry: the pull-only account (REGISTRY_PULL_*)
+    #   - GitLab registry: a Deploy Token with the `read_registry` scope.
+    #     CI_DEPLOY_USER / CI_DEPLOY_PASSWORD are populated automatically,
+    #     but ONLY if that token is named exactly `gitlab-deploy-token`.
+    # Never $CI_JOB_TOKEN — it dies with the pipeline.
+    - export USERNAME="${REGISTRY_PULL_USER:-$CI_DEPLOY_USER}"
+    - export PASSWORD="${REGISTRY_PULL_PASSWORD:-$CI_DEPLOY_PASSWORD}"
+    - |
+      if [ -z "${USERNAME}" ] || [ -z "${PASSWORD}" ]; then
+        echo "No pull credentials. Set REGISTRY_PULL_USER/REGISTRY_PULL_PASSWORD,"
+        echo "or create a deploy token named exactly 'gitlab-deploy-token'."
+        exit 1
+      fi
+    # Note: no ": " (colon-space) in this line — in a plain YAML scalar that
+    # turns the entry into a mapping and GitLab rejects the job.
+    - echo "Deploying ${STACK_NAME} from ${STACK_FILE} at tag ${STACK_PARAM}"
+    - /docker-entrypoint.sh

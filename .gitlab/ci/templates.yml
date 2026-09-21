@@ -1,0 +1,179 @@
+---
+# Reusable job templates.
+#
+# Templates are hidden jobs (leading dot). Use them with `extends:`, which is
+# the supported GitLab mechanism and composes with `rules:` — unlike YAML
+# anchors, which cannot be used across `include:`d files.
+
+############################################
+# Rules
+############################################
+
+# Code quality and tests: merge requests, the default branch and tags.
+.rules-code:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_BRANCH
+
+# Publishing images and deploying: the default branch, or a release tag.
+#
+# The tag pattern matters. Any tag used to deploy, which meant a tag put on an
+# older commit for some other purpose -- a workshop checkpoint, a bisect
+# marker -- would build that old commit and deploy it over whatever is
+# running. Only version-shaped tags (1.2.3, 1.0.0a1, v2.0) release; everything
+# else still gets linted and tested by .rules-code.
+.rules-release:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v?\d+\.\d+/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+############################################
+# Environments
+############################################
+
+# Python / uv jobs.
+#
+# Both backend/Makefile and frontend/Makefile evaluate
+# `$(shell uvx repoplone settings dump)` while parsing, so every job that runs
+# make needs uv *and* jq. `make install` also shells out to git (uv sync and
+# cookiecutter-zope-instance both fetch from GitHub).
+.uv-job:
+  image: ${UV_IMAGE}
+  tags:
+    - ${RUNNER_TAG_BUILD}
+  interruptible: true
+  variables:
+    # The Makefiles colourise output with tput; without a TERM it writes to
+    # stderr on every line.
+    TERM: xterm
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends git jq make ncurses-bin
+    - uv --version
+  cache:
+    key:
+      files:
+        - backend/uv.lock
+      prefix: uv
+    paths:
+      - .uv-cache
+
+# Node / pnpm jobs.
+#
+# node:24-bookworm already provides git, make, curl and tput; only uv is
+# missing.
+.node-job:
+  image: ${NODE_IMAGE}
+  tags:
+    - ${RUNNER_TAG_BUILD}
+  interruptible: true
+  variables:
+    TERM: xterm
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends jq
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+    - export PATH="$HOME/.local/bin:$PATH"
+    - npm i -g corepack@latest
+    - corepack enable
+    # corepack reads `packageManager` from frontend/package.json, so this has
+    # to run there. Jobs extending this template start in frontend/.
+    - cd "${CI_PROJECT_DIR}/frontend"
+    - corepack prepare --activate
+    - pnpm config set store-dir "${PNPM_STORE_DIR}"
+  cache:
+    # The pnpm store is keyed on the lockfile; frontend/core is the Volto
+    # checkout that mrs-developer clones, keyed on the pinned tag.
+    - key:
+        files:
+          - frontend/pnpm-lock.yaml
+        prefix: pnpm
+      paths:
+        - .pnpm-store
+    - key:
+        files:
+          - frontend/mrs.developer.json
+        prefix: volto-core
+      paths:
+        - frontend/core
+
+############################################
+# Container images
+############################################
+
+# Build and push an image with buildx, using the registry as a layer cache.
+# https://docs.gitlab.com/ci/docker/docker_layer_caching/
+#
+# Extending jobs must set: IMAGE_ROLE (`backend` or `frontend`, which is both
+# the image name and the build context directory) and BUILD_ARG_NAME.
+#
+# BUILD_ARG_NAME is the *name* of the variable holding the version to build
+# with (PYTHON_VERSION or VOLTO_VERSION); the value is read from the
+# environment in the script, where the dotenv variables from `config` are
+# guaranteed to be present. The image name is assembled there too, for the
+# same reason.
+.build-image:
+  stage: build
+  image: ${DOCKER_IMAGE}
+  # No `services: [docker:dind]`.
+  #
+  # This runner mounts the host's docker socket into job containers, so a dind
+  # service cannot bind /var/run/docker.sock ("device or resource busy"), dies,
+  # and costs 30s per job on a health check that can never pass — while the
+  # build silently proceeds against the host daemon anyway.
+  #
+  # The consequence is that builds run on the runner host's docker daemon and
+  # are not isolated from it. If the socket mount is ever removed from the
+  # runner config, add the dind service and DOCKER_TLS_CERTDIR back.
+  tags:
+    - ${RUNNER_TAG_BUILD}
+  # No `needs:` on purpose — stage ordering makes the build wait for the whole
+  # check and test stages, and the dotenv variables from `config` (stage .pre)
+  # are inherited by every later stage anyway.
+  before_script:
+    # Push credentials: the self-hosted pair when REGISTRY_USER is set,
+    # otherwise GitLab's built-in per-job credentials.
+    - docker login
+      -u "${REGISTRY_USER:-$CI_REGISTRY_USER}"
+      -p "${REGISTRY_PASSWORD:-$CI_REGISTRY_PASSWORD}"
+      "${REGISTRY_HOST}"
+    # One persistent buildkit shared by every build job, deliberately never
+    # torn down.
+    #
+    # BuildKit handles concurrent builds fine — what broke previously was a
+    # finished job running `buildx rm` on a builder another job was still
+    # using, which killed that build with "graceful_stop". Sharing is safe;
+    # removing is not. Keeping it warm also avoids re-pulling the base images
+    # (the frontend builder image alone is ~565 MB) on every single build.
+    #
+    # `buildx create` records the builder in this job container's own CLI
+    # state, which is fresh each run, so it succeeds even when the underlying
+    # buildkit container already exists; `--bootstrap` then reuses that
+    # running container. The `||` covers the case where the CLI state does
+    # persist. Disk is bounded by buildkit's own GC policy.
+    - export BUILDER="buildx-${CI_PROJECT_PATH_SLUG}"
+    - docker buildx create --use --driver docker-container --name "${BUILDER}"
+      || docker buildx use "${BUILDER}"
+    - docker buildx inspect --bootstrap
+  script:
+    - |
+      set -e
+      IMAGE="${REGISTRY_IMAGE_PREFIX}/${IMAGE_ROLE}"
+      BUILD_ARG_VALUE="$(printenv "${BUILD_ARG_NAME}")"
+      TAGS="--tag ${IMAGE}:${IMAGE_TAG}"
+      if [ "${CI_COMMIT_BRANCH}" = "${CI_DEFAULT_BRANCH}" ]; then
+        # `latest` is the fallback the stack file uses (${STACK_PARAM:-latest}).
+        TAGS="${TAGS} --tag ${IMAGE}:latest"
+      fi
+      echo "Building ${IMAGE} (${BUILD_ARG_NAME}=${BUILD_ARG_VALUE}) with ${TAGS}"
+      docker buildx build ${TAGS} \
+        --build-arg "${BUILD_ARG_NAME}=${BUILD_ARG_VALUE}" \
+        --build-arg "MAINTAINER=${MAINTAINER}" \
+        --cache-from "type=registry,ref=${IMAGE}/cache" \
+        --cache-to "type=registry,ref=${IMAGE}/cache,mode=max" \
+        --push \
+        "${IMAGE_ROLE}"
+  # No after_script: the builder is shared and persistent by design. Removing
+  # it here is exactly what killed a concurrent build before.

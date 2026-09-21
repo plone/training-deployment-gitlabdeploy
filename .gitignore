@@ -1,0 +1,15 @@
+!.vscode
+node_modules
+/core
+/public
+*.mo
+
+# CI caches
+/.uv-cache
+/.pnpm-store
+
+# User
+/examples
+# gitlab-ci-local scratch output
+/.gitlab-ci-local/
+/.claude

@@ -1,0 +1,66 @@
+---
+# Towncrier changelog checks, mirroring .github/workflows/changelog.yml.
+#
+# Each job only runs when files in its area changed, and can be skipped by
+# adding a `skip changelog` label to the merge request.
+
+.changelog-job:
+  extends: .uv-job
+  stage: check
+  needs: ["config"]
+  variables:
+    # towncrier compares against the target branch, so the shallow clone that
+    # GitLab makes by default is not enough.
+    GIT_DEPTH: "0"
+  before_script:
+    - !reference [.uv-job, before_script]
+    - git fetch --no-tags origin "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+
+"changelog:backend":
+  extends: .changelog-job
+  script:
+    - uvx towncrier check
+      --compare-with "origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      --config backend/pyproject.toml
+      --dir backend/
+  rules:
+    - if: $CI_MERGE_REQUEST_LABELS =~ /skip changelog/
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - backend/**/*
+
+"changelog:frontend":
+  extends: .changelog-job
+  script:
+    - uvx towncrier check
+      --compare-with "origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      --config frontend/packages/volto-playclusterdemo/towncrier.toml
+      --dir frontend/packages/volto-playclusterdemo
+  rules:
+    - if: $CI_MERGE_REQUEST_LABELS =~ /skip changelog/
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - frontend/**/*
+
+"changelog:repository":
+  extends: .changelog-job
+  script:
+    - uvx towncrier check
+      --compare-with "origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      --config towncrier.toml
+      --dir .
+  rules:
+    - if: $CI_MERGE_REQUEST_LABELS =~ /skip changelog/
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - .gitlab-ci.yml
+        - .gitlab/**/*
+        - .vscode/**/*
+        - devops/**/*
+        - docs/**/*
+        - docker-compose.yml
+        - Makefile
+        - README.md

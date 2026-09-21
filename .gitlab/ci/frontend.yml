@@ -1,0 +1,44 @@
+---
+# Frontend jobs.
+#
+# .node-job leaves the shell in frontend/, so these scripts do not cd.
+#
+# Each of these runs its own `make install` — mrs-developer cloning Volto,
+# `pnpm i`, then `build-deps`. That is deliberate duplication, traded for a
+# granular pass/fail signal per check. It is cheap once the pnpm store and
+# frontend/core caches are warm, and expensive on a cold runner.
+
+"frontend:lint":
+  extends:
+    - .node-job
+    - .rules-code
+  stage: check
+  # Start as soon as config is done rather than waiting for a whole stage, so
+  # check and test run as one wide batch instead of two narrow ones.
+  needs: ["config"]
+  script:
+    - make install
+    # Unlike the backend, `make lint` here is read-only: pnpm lint uses
+    # `eslint --max-warnings=0`, plus `prettier --check` and stylelint.
+    - make lint
+
+"frontend:i18n":
+  extends:
+    - .node-job
+    - .rules-code
+  stage: check
+  needs: ["config"]
+  script:
+    - make install
+    # `make ci-i18n` regenerates the locales and ends in `git diff --exit-code`.
+    - make ci-i18n
+
+"frontend:test":
+  extends:
+    - .node-job
+    - .rules-code
+  stage: test
+  needs: ["config"]
+  script:
+    - make install
+    - make ci-test

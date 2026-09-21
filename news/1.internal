@@ -1,0 +1,1 @@
+Add GitLab CI/CD pipeline (check, test, build, deploy) and remove the GitHub Actions workflows. Container images are built with buildx and pushed to the GitLab registry; the Docker Swarm stack is deployed with `kitconcept/docker-stack-deploy`. @fredvd

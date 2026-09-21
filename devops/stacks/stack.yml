@@ -1,0 +1,170 @@
+---
+# Docker Swarm stack.
+#
+# There is one deployment target for now. If staging or similar is added later,
+# copy this file and point `stack_file` in repository.toml at the right one.
+#
+# Nothing host-specific is written here. Every ${VAR} below is interpolated by
+# `docker stack deploy` from the environment, and all of them originate in the
+# [deployment] section of repository.toml, resolved by the CI `config` job.
+#
+# This stack deliberately does NOT run its own Traefik: the cluster already has
+# one holding ports 80/443, and only one service can bind those ingress ports.
+# Routing is therefore expressed purely as labels for that instance, built from
+# the [deployment.traefik] settings.
+version: '3.8'
+
+services:
+  frontend:
+    image: ${REGISTRY_IMAGE_PREFIX:?set REGISTRY_IMAGE_PREFIX to container_images_prefix from repository.toml}/frontend:${STACK_PARAM:-latest}
+    environment:
+      # Fully-qualify the backend with the stack name. The bare alias `backend`
+      # is also registered on the shared external nw-public network by every
+      # other stack, so it can resolve to a sibling project's backend. The
+      # <stack>_backend name Swarm assigns is unique to this stack.
+      RAZZLE_INTERNAL_API_PATH: http://${STACK_NAME:?set deployment.stack_name in repository.toml}_backend:8080/Plone
+      RAZZLE_API_PATH: https://${PUBLIC_HOSTNAME:?set deployment.hostname in repository.toml}
+    depends_on:
+      - backend
+    networks:
+      - nw-public
+      - nw-internal
+    deploy:
+      replicas: 2
+      # Keep the stateless services on the nodes meant to run them. Optional:
+      # the default matches every Linux node, so an unset app_placement leaves
+      # scheduling unconstrained.
+      placement:
+        constraints:
+          - ${APP_PLACEMENT:-node.platform.os == linux}
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+      labels:
+        - traefik.enable=true
+        - traefik.constraint-label=${TRAEFIK_CONSTRAINT_LABEL:-public}
+        # Which network the cluster Traefik should reach this service on.
+        #
+        # Use the swarm label only. Traefik does NOT ignore the unused variant:
+        # defining traefik.docker.network alongside it makes it skip the
+        # service entirely with "both Docker and Swarm labels are defined".
+        - traefik.swarm.network=${TRAEFIK_NETWORK:-nw-public}
+        # SERVICE
+        #
+        # Router, service and middleware names are global to the Traefik
+        # instance, so everything this stack defines is prefixed with
+        # STACK_PREFIX. Without that, a second project on the cluster would
+        # silently collide with this one. `gzip` is deliberately *not*
+        # prefixed: it is the cluster's shared middleware, not ours.
+        - traefik.http.services.${STACK_PREFIX:?set STACK_PREFIX to deployment.stack_prefix from repository.toml}-frontend.loadbalancer.server.port=3000
+        # ROUTES
+        ## /
+        - traefik.http.routers.${STACK_PREFIX}-frontend.rule=Host(`${PUBLIC_HOSTNAME}`)
+        - traefik.http.routers.${STACK_PREFIX}-frontend.entrypoints=${TRAEFIK_ENTRYPOINT:-https}
+        - traefik.http.routers.${STACK_PREFIX}-frontend.tls=true
+        - traefik.http.routers.${STACK_PREFIX}-frontend.tls.certresolver=${TRAEFIK_CERTRESOLVER:-le}
+        - traefik.http.routers.${STACK_PREFIX}-frontend.service=${STACK_PREFIX}-frontend
+        - traefik.http.routers.${STACK_PREFIX}-frontend.middlewares=gzip
+        # No HTTP router here on purpose: the cluster's Traefik redirects
+        # plain HTTP to HTTPS at the entrypoint, so every stack gets it
+        # without declaring one.
+
+  backend:
+    image: ${REGISTRY_IMAGE_PREFIX}/backend:${STACK_PARAM:-latest}
+    environment:
+      RELSTORAGE_DSN: "dbname='${DB_NAME:-plone}' user='${DB_USER:-plone}' host='${DB_HOST:-db}' password='${DB_PASSWORD:-SsErBkmOYaNS}' port='${DB_PORT:-5432}'"
+    depends_on:
+      - db
+    networks:
+      - nw-public
+      - nw-internal
+    deploy:
+      replicas: 2
+      # Keep the stateless services on the nodes meant to run them. Optional:
+      # the default matches every Linux node, so an unset app_placement leaves
+      # scheduling unconstrained.
+      placement:
+        constraints:
+          - ${APP_PLACEMENT:-node.platform.os == linux}
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+      labels:
+        - traefik.enable=true
+        - traefik.constraint-label=${TRAEFIK_CONSTRAINT_LABEL:-public}
+        # Swarm label only — see the note on the frontend service.
+        - traefik.swarm.network=${TRAEFIK_NETWORK:-nw-public}
+        # SERVICE
+        - traefik.http.services.${STACK_PREFIX}-backend.loadbalancer.server.port=8080
+        # MIDDLEWARES
+        ## VHM rewrite /++api++/
+        - "traefik.http.middlewares.${STACK_PREFIX}-vhm.replacepathregex.regex=^/\\+\\+api\\+\\+($$|/.*)"
+        - "traefik.http.middlewares.${STACK_PREFIX}-vhm.replacepathregex.replacement=/VirtualHostBase/https/${PUBLIC_HOSTNAME}/Plone/++api++/VirtualHostRoot$$1"
+        ## VHM rewrite /ClassicUI/
+        - "traefik.http.middlewares.${STACK_PREFIX}-vhm-classicui.replacepathregex.regex=^/ClassicUI($$|/.*)"
+        - "traefik.http.middlewares.${STACK_PREFIX}-vhm-classicui.replacepathregex.replacement=/VirtualHostBase/https/${PUBLIC_HOSTNAME}/Plone/VirtualHostRoot/_vh_ClassicUI$$1"
+        ## Basic Authentication
+        ### Note: all dollar signs in the hash need to be doubled for escaping.
+        ### To create user:password pair, it's possible to use this command:
+        ### echo $(htpasswd -nb user password) | sed -e s/\\$/\\$\\$/g
+        ### Defaults to admin:admin
+        - traefik.http.middlewares.${STACK_PREFIX}-backend-auth.basicauth.headerField=X-Auth-ClassicUI
+        - traefik.http.middlewares.${STACK_PREFIX}-backend-auth.basicauth.users=admin:$$apr1$$uZPT5Fgu$$AmlIdamxT5ipBvPlsdfD70
+
+        # ROUTES
+        ## /++api++
+        - traefik.http.routers.${STACK_PREFIX}-backend.rule=Host(`${PUBLIC_HOSTNAME}`) && PathPrefix(`/++api++`)
+        - traefik.http.routers.${STACK_PREFIX}-backend.entrypoints=${TRAEFIK_ENTRYPOINT:-https}
+        - traefik.http.routers.${STACK_PREFIX}-backend.tls=true
+        - traefik.http.routers.${STACK_PREFIX}-backend.tls.certresolver=${TRAEFIK_CERTRESOLVER:-le}
+        - traefik.http.routers.${STACK_PREFIX}-backend.service=${STACK_PREFIX}-backend
+        - traefik.http.routers.${STACK_PREFIX}-backend.middlewares=gzip,${STACK_PREFIX}-vhm
+        ## /ClassicUI
+        - traefik.http.routers.${STACK_PREFIX}-classicui.rule=Host(`${PUBLIC_HOSTNAME}`) && PathPrefix(`/ClassicUI`)
+        - traefik.http.routers.${STACK_PREFIX}-classicui.entrypoints=${TRAEFIK_ENTRYPOINT:-https}
+        - traefik.http.routers.${STACK_PREFIX}-classicui.tls=true
+        - traefik.http.routers.${STACK_PREFIX}-classicui.tls.certresolver=${TRAEFIK_CERTRESOLVER:-le}
+        - traefik.http.routers.${STACK_PREFIX}-classicui.service=${STACK_PREFIX}-backend
+        - traefik.http.routers.${STACK_PREFIX}-classicui.middlewares=gzip,${STACK_PREFIX}-backend-auth,${STACK_PREFIX}-vhm-classicui
+
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${DB_USER:-plone}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-SsErBkmOYaNS}
+      POSTGRES_DB: ${DB_NAME:-plone}
+    deploy:
+      replicas: 1
+      # vol-site-data is a bind mount to a path on one specific node. Without
+      # this constraint Swarm may reschedule the task elsewhere, where that
+      # path is a different — empty — directory, and the site comes up with a
+      # blank database.
+      placement:
+        constraints:
+          - ${DB_PLACEMENT:?set DB_PLACEMENT to deployment.db_placement from repository.toml}
+      update_config:
+        parallelism: 1
+        delay: 1s
+        order: stop-first
+    volumes:
+      - vol-site-data:/var/lib/postgresql
+    networks:
+      - nw-internal
+
+volumes:
+  vol-site-data:
+    driver_opts:
+      type: none
+      device: "${DATA_PATH:?set DATA_PATH to deployment.data_path from repository.toml}"
+      o: bind
+
+networks:
+  # The cluster's shared Traefik network, created outside this stack.
+  nw-public:
+    external: true
+    name: ${TRAEFIK_NETWORK:-nw-public}
+  nw-internal:
+    internal: true
+    driver: overlay
