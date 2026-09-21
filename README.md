@@ -47,6 +47,14 @@ variables from the group, but must describe its own deployment first: until `git
 the copy cannot replace this project's stack. Chapter 6 of the documentation lists what to change,
 and the two one-off steps on the cluster — the data directory, and creating the Plone site.
 
+---
+
+# The generated project README
+
+What follows is the README that cookieplone generates for a Plone 6 project: how to install, run and
+check it locally. It is kept as generated, apart from the clone URL and the descriptions of
+`devops/` and `docs/`, which were updated to match this repository.
+
 ## Quick Start 🏁
 
 ### Prerequisites ✅
